@@ -14,10 +14,12 @@ from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.data.util import AddMiDaS
 
 torch.set_grad_enabled(False)
+### HumanSD纯纯follow这里，看出来了，代码结构完全一样，基于SD2改的，毕竟深度图换边图很easy
 
-
+### config是configs/stable-diffusion/v2-midas-inference.yaml
 def initialize_model(config, ckpt):
     config = OmegaConf.load(config)
+    ### model路径是ldm.models.diffusion.ddpm.LatentDepth2ImageDiffusion
     model = instantiate_from_config(config.model)
     model.load_state_dict(torch.load(ckpt)["state_dict"], strict=False)
 
@@ -38,6 +40,8 @@ def make_batch_sd(
     image = np.array(image.convert("RGB"))
     image = torch.from_numpy(image).to(dtype=torch.float32) / 127.5 - 1.0
     # sample['jpg'] is tensor hwc in [-1, 1] at this point
+    ### 图像预处理，copilot：这里是把图片转成midas_in，midas_in是tensor 1chw in [-1, 1]
+    ### jpg处理好以后就是midas_in了
     midas_trafo = AddMiDaS(model_type=model_type)
     batch = {
         "jpg": image,
@@ -68,12 +72,14 @@ def paint(sampler, image, prompt, t_enc, seed, scale, num_samples=1, callback=No
             torch.autocast("cuda"):
         batch = make_batch_sd(
             image, txt=prompt, device=device, num_samples=num_samples)
+        ### 看配置，fist_stage_key是jpg
         z = model.get_first_stage_encoding(model.encode_first_stage(
             batch[model.first_stage_key]))  # move to latent space
         c = model.cond_stage_model.encode(batch["txt"])
         c_cat = list()
         for ck in model.concat_keys:
             cc = batch[ck]
+            ### 感觉用了特殊的深度模型来处理深度图，HumanSD直接用VAE的encoder来处理
             cc = model.depth_model(cc)
             depth_min, depth_max = torch.amin(cc, dim=[1, 2, 3], keepdim=True), torch.amax(cc, dim=[1, 2, 3],
                                                                                            keepdim=True)
@@ -92,6 +98,7 @@ def paint(sampler, image, prompt, t_enc, seed, scale, num_samples=1, callback=No
             c_cat.append(cc)
         c_cat = torch.cat(c_cat, dim=1)
         # cond
+        ### 最终收获大概如此，c_cat是深度图，c是文本
         cond = {"c_concat": [c_cat], "c_crossattn": [c]}
 
         # uncond cond
